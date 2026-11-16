@@ -1,290 +1,142 @@
 
-import os
-import json
-import numpy as np
-import pandas as pd
 import streamlit as st
 import tensorflow as tf
-
+import numpy as np
+import json
+from pathlib import Path
 from PIL import Image
-from datetime import datetime
 
-# Page Configuration
+# Page settings
 st.set_page_config(
-    page_title="Fake Currency Detection System",
+    page_title="Fake Currency Detection",
     page_icon="💵",
-    layout="wide"
+    layout="centered"
 )
 
-# File paths
-MODEL_PATH = "currency_model.keras"
-CLASSES_PATH = "classes.json"
-HISTORY_PATH = "detection_history.csv"
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "currency_model.keras"
+CLASSES_PATH = BASE_DIR / "classes.json"
 
-IMAGE_SIZE = (224, 224)
+st.title("💵 Fake Currency Detection System")
+st.write("Upload a currency image to check whether it is Fake or Genuine.")
 
-
-# Load AI Model
+# Load AI model
 @st.cache_resource
-def load_ai_model():
+def load_model():
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"AI Model not found: {MODEL_PATH.name}"
+        )
     return tf.keras.models.load_model(MODEL_PATH)
-
 
 # Load class names
 def load_classes():
-    with open(CLASSES_PATH, "r") as file:
-        data = json.load(file)
-    return data["class_names"]
-
-
-# Save detection history
-def save_record(filename, prediction, confidence):
-
-    record = pd.DataFrame([{
-        "Date": datetime.now().strftime("%d-%m-%Y"),
-        "Time": datetime.now().strftime("%H:%M:%S"),
-        "Image": filename,
-        "Prediction": prediction,
-        "Confidence": round(confidence * 100, 2)
-    }])
-
-    if os.path.exists(HISTORY_PATH):
-        record.to_csv(
-            HISTORY_PATH,
-            mode="a",
-            header=False,
-            index=False
+    if not CLASSES_PATH.exists():
+        raise FileNotFoundError(
+            f"Classes file not found: {CLASSES_PATH.name}"
         )
-    else:
-        record.to_csv(HISTORY_PATH, index=False)
 
+    with open(CLASSES_PATH, "r") as f:
+        classes = json.load(f)
 
-# Sidebar
-st.sidebar.title("💵 Currency Detection")
+    return classes
 
-menu = st.sidebar.selectbox(
-    "Choose Module",
-    [
-        "Home",
-        "Currency Detection",
-        "Detection History",
-        "About Project"
-    ]
+# Check files
+try:
+    model = load_model()
+    classes = load_classes()
+
+    st.success("AI Model Loaded Successfully!")
+
+except Exception as e:
+    st.error(f"AI Model Error: {e}")
+    st.info(
+        "Make sure currency_model.keras and classes.json "
+        "are present in the same folder as app.py."
+    )
+    st.stop()
+
+# Upload image
+uploaded_file = st.file_uploader(
+    "Upload Currency Image",
+    type=["jpg", "jpeg", "png"]
 )
 
+if uploaded_file is not None:
 
-# HOME PAGE
-if menu == "Home":
+    image = Image.open(uploaded_file).convert("RGB")
 
-    st.title("💵 Fake Currency Detection System")
-
-    st.subheader(
-        "Indian Currency Detection using Deep Learning"
+    st.image(
+        image,
+        caption="Uploaded Currency Image",
+        use_container_width=True
     )
 
-    st.write(
-        "This AI system uses a CNN model to classify "
-        "currency note images into Fake and Genuine categories."
-    )
+    if st.button("Detect Currency", type="primary"):
 
-    col1, col2, col3 = st.columns(3)
+        with st.spinner("Analyzing Currency..."):
 
-    col1.metric("AI Technology", "CNN")
-    col2.metric("Framework", "TensorFlow")
-    col3.metric("System", "Active")
+            try:
+                # Preprocess image
+                image = image.resize((224, 224))
 
-    st.divider()
+                image_array = np.array(image)
+                image_array = image_array.astype("float32")
+                image_array = np.expand_dims(image_array, axis=0)
 
-    st.header("Project Features")
+                # Prediction
+                prediction = model.predict(
+                    image_array,
+                    verbose=0
+                )
 
-    st.markdown("""
-    - Upload currency note images
-    - AI-based currency classification
-    - Fake and Genuine prediction
-    - Confidence score
-    - Detection history
-    - Download detection report
-    """)
+                prediction = np.array(prediction)
 
-    st.info(
-        "Upload an image from the Currency Detection module "
-        "to start the prediction."
-    )
-
-
-# CURRENCY DETECTION PAGE
-elif menu == "Currency Detection":
-
-    st.title("🔍 Currency Detection")
-
-    uploaded_file = st.file_uploader(
-        "Upload Currency Image",
-        type=["jpg", "jpeg", "png"]
-    )
-
-    if uploaded_file is not None:
-
-        image = Image.open(uploaded_file).convert("RGB")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.image(
-                image,
-                caption="Uploaded Currency Image",
-                use_container_width=True
-            )
-
-        with col2:
-
-            if st.button("Detect Currency", type="primary"):
-
-                if not os.path.exists(MODEL_PATH):
-                    st.error("AI Model not found. Run train.py first.")
-
-                elif not os.path.exists(CLASSES_PATH):
-                    st.error("classes.json file not found.")
+                # Handle binary or multiclass output
+                if prediction.size == 1:
+                    probability = float(prediction.flatten()[0])
+                    index = 1 if probability >= 0.5 else 0
+                    confidence = (
+                        probability if index == 1
+                        else 1 - probability
+                    )
 
                 else:
+                    scores = prediction.flatten()
+                    index = int(np.argmax(scores))
+                    confidence = float(scores[index])
 
-                    with st.spinner("AI is analysing the image..."):
+                # Get predicted class
+                if isinstance(classes, list):
+                    class_name = classes[index]
+                else:
+                    class_name = classes[str(index)]
 
-                        model = load_ai_model()
-                        class_names = load_classes()
+                class_name = str(class_name).lower()
 
-                        # Image preprocessing
-                        image = image.resize(IMAGE_SIZE)
+                st.subheader("Detection Result")
 
-                        image_array = np.array(
-                            image,
-                            dtype=np.float32
-                        )
+                if class_name in ["fake", "forged"]:
+                    st.error("⚠️ Result: FAKE CURRENCY")
 
-                        image_array = np.expand_dims(
-                            image_array,
-                            axis=0
-                        )
+                elif class_name in ["genuine", "real"]:
+                    st.success("✅ Result: GENUINE CURRENCY")
 
-                        # Model prediction
-                        score = float(
-                            model.predict(
-                                image_array,
-                                verbose=0
-                            )[0][0]
-                        )
+                else:
+                    st.warning(f"Predicted Class: {class_name}")
 
-                        # Sigmoid output represents class index 1
-                        probabilities = [1 - score, score]
+                st.write(
+                    f"Confidence: {confidence * 100:.2f}%"
+                )
 
-                        prediction_index = int(
-                            np.argmax(probabilities)
-                        )
+                st.progress(
+                    min(max(confidence, 0.0), 1.0)
+                )
 
-                        prediction = class_names[prediction_index]
+                st.caption(
+                    "This is an experimental AI prediction, "
+                    "not an official currency authentication."
+                )
 
-                        confidence = probabilities[prediction_index]
-
-                        st.divider()
-
-                        if prediction.lower() == "genuine":
-
-                            st.success(
-                                "✅ AI Prediction: GENUINE CURRENCY"
-                            )
-
-                        else:
-
-                            st.error(
-                                "⚠️ AI Prediction: FAKE CURRENCY"
-                            )
-
-                        st.metric(
-                            "Prediction Confidence",
-                            f"{confidence * 100:.2f}%"
-                        )
-
-                        st.progress(float(confidence))
-
-                        st.caption(
-                            "Confidence is the model's score, "
-                            "not a guarantee of authenticity."
-                        )
-
-                        # Save record
-                        save_record(
-                            uploaded_file.name,
-                            prediction,
-                            confidence
-                        )
-
-                        st.success("Detection record saved!")
-
-
-# DETECTION HISTORY PAGE
-elif menu == "Detection History":
-
-    st.title("📊 Detection History")
-
-    if os.path.exists(HISTORY_PATH):
-
-        df = pd.read_csv(HISTORY_PATH)
-
-        st.dataframe(
-            df,
-            use_container_width=True
-        )
-
-        csv = df.to_csv(index=False).encode("utf-8")
-
-        st.download_button(
-            label="Download Detection Report",
-            data=csv,
-            file_name="currency_detection_report.csv",
-            mime="text/csv"
-        )
-
-    else:
-
-        st.info("No detection records available yet.")
-
-
-# ABOUT PROJECT PAGE
-elif menu == "About Project":
-
-    st.title("About Fake Currency Detection System")
-
-    st.write("""
-    This project is developed using Artificial Intelligence
-    and Deep Learning.
-
-    A Convolutional Neural Network (CNN) is trained to
-    classify currency images into two categories:
-
-    1. Fake Currency
-    2. Genuine Currency
-
-    Technologies Used:
-
-    - Python
-    - TensorFlow
-    - CNN
-    - NumPy
-    - Pandas
-    - Pillow
-    - Streamlit
-    """)
-
-    st.warning(
-        "This is an educational image-classification prototype. "
-        "It cannot verify all physical security features of a banknote. "
-        "Do not use its prediction as proof of authenticity."
-    )
-
-
-# Footer
-st.divider()
-
-st.caption(
-    "Fake Currency Detection System | "
-    "Python | CNN | TensorFlow | Streamlit"
-)
+            except Exception as e:
+                st.error(f"Prediction Error: {e}")
